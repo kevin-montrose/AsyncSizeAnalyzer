@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 using Xunit;
 
 namespace AsyncSizeAnalyzer.Tests
@@ -61,7 +62,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("b", l.Name));
@@ -79,7 +80,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fuzzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fuzzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("b", l.Name));
@@ -206,7 +207,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -224,7 +225,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -242,7 +243,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -260,14 +261,14 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
-                Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
+                Assert.Empty(state.Value.Locals);
                 Assert.Collection(
-                    state.Value.Parameters, 
-                    p => Assert.Equal("x", p.Name),
-                    p => Assert.Equal("a", p.Name)
+                    state.Value.Parameters.OrderBy(x => x.Name),
+                    p => Assert.Equal("a", p.Name),
+                    p => Assert.Equal("x", p.Name)
                 );
                 Assert.Empty(state.Value.ImplicitLocals);
                 Assert.True(state.Value.ThisIsReferenced);
@@ -282,10 +283,10 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
-                Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
+                Assert.Empty(state.Value.Locals);
                 Assert.Collection(
                     state.Value.Parameters,
                     p => Assert.Equal("x", p.Name)
@@ -303,7 +304,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -324,7 +325,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -345,7 +346,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -366,7 +367,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -444,7 +445,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -462,7 +463,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -480,7 +481,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -559,7 +560,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -577,7 +578,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -595,7 +596,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
@@ -634,7 +635,7 @@ namespace AsyncSizeAnalyzer.Tests
                                 {
                                     System.Console.WriteLine(x);
 
-                                    var i = 123;
+                                    var i = System.Console.ReadLine();
                                     foreach(var _ in x)
                                     {
                                         await System.Threading.Tasks.Task.Yield();
@@ -646,7 +647,7 @@ namespace AsyncSizeAnalyzer.Tests
                                 {
                                     System.Console.WriteLine(x);
 
-                                    var i = 123;
+                                    var i = System.Console.ReadLine();
                                     
                                     foreach(var q in await GetStaticIntsAsync())
                                     {
@@ -671,15 +672,14 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Empty(state.Value.Locals);
                 Assert.Empty(state.Value.Parameters);
                 Assert.Collection(
                     state.Value.ImplicitLocals,
-                    x => Assert.Equal("int[]", x.ToString()),
-                    x => Assert.Equal("int", x.ToString())
+                    x => Assert.Equal("System.Collections.IEnumerator", x.ToString())
                 );
                 Assert.False(state.Value.ThisIsReferenced);
             }
@@ -693,15 +693,14 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(state.Value.Locals, l => Assert.Equal("i", l.Name));
                 Assert.Empty(state.Value.Parameters);
                 Assert.Collection(
                     state.Value.ImplicitLocals,
-                    x => Assert.Equal("int[]", x.ToString()),
-                    x => Assert.Equal("int", x.ToString())
+                    x => Assert.Equal("System.Collections.IEnumerator", x.ToString())
                 );
                 Assert.True(state.Value.ThisIsReferenced);
             }
@@ -715,20 +714,15 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Collection(
                     state.Value.Locals.OrderBy(x => x.Name),
-                    l => Assert.Equal("i", l.Name),
-                    l => Assert.Equal("q", l.Name)
+                    l => Assert.Equal("i", l.Name)
                 );
                 Assert.Empty(state.Value.Parameters);
-                Assert.Collection(
-                    state.Value.ImplicitLocals,
-                    x => Assert.Equal("int[]", x.ToString()),
-                    x => Assert.Equal("int", x.ToString())
-                );
+                Assert.Empty(state.Value.ImplicitLocals);
                 Assert.False(state.Value.ThisIsReferenced);
             }
         }
@@ -773,14 +767,14 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Empty(state.Value.Locals);
                 Assert.Collection(
-                    state.Value.Parameters,
-                    l => Assert.Equal("b", l.Name),
-                    l => Assert.Equal("a", l.Name)
+                    state.Value.Parameters.OrderBy(x => x.Name),
+                    l => Assert.Equal("a", l.Name),
+                    l => Assert.Equal("b", l.Name)
                 );
                 Assert.Empty(state.Value.ImplicitLocals);
                 Assert.False(state.Value.ThisIsReferenced);
@@ -828,7 +822,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(fizzMtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(fizzMtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
                 Assert.Empty(state.Value.Locals);
@@ -859,14 +853,19 @@ namespace AsyncSizeAnalyzer.Tests
                                 static System.Threading.Tasks.Task<System.Collections.Generic.List<int>> GetListAsync()
                                 => null!;
 
-                                //static System.Threading.Tasks.Task<Fizz> GetExtensionAsync()
-                                //=> null!;
-
                                 async System.Threading.Tasks.Task BuiltIn()
                                 {
                                     foreach(var a in await GetArrayAsync())
                                     {
                                         System.Console.WriteLine(a);
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task BuiltIn2(int[] x)
+                                {
+                                    foreach(var a in x)
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
                                     }
                                 }
 
@@ -878,6 +877,14 @@ namespace AsyncSizeAnalyzer.Tests
                                     }
                                 }
 
+                                async System.Threading.Tasks.Task Interface2(System.Collections.Generic.IEnumerable<int> x)
+                                {
+                                    foreach(var a in x)
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                }
+
                                 async System.Threading.Tasks.Task DuckTyped()
                                 {
                                     foreach(var a in await GetListAsync())
@@ -886,35 +893,14 @@ namespace AsyncSizeAnalyzer.Tests
                                     }
                                 }
 
-                                //async System.Threading.Tasks.Task Extension()
-                                //{
-                                //    foreach(var a in await GetExtensionAsync())
-                                //    {
-                                //        System.Console.WriteLine(a);
-                                //    }
-                                //}
+                                async System.Threading.Tasks.Task DuckTyped2(System.Collections.Generic.List<int> x)
+                                {
+                                    foreach(var a in x)
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                }
                             }
-
-                            //class Fizz
-                            //{
-
-                            //}
-
-                            //struct FizzEnumerator: System.Collections.Generic.IEnumerator<int>
-                            //{
-                            //    object System.Collections.IEnumerator.Current => Current;
-
-                            //    public int Current => 0;
-                            //    public bool MoveNext() => false;
-                            //    public void Dispose() { }
-                            //    public void Reset() { }
-                            //}
-        
-                            //static class Exts
-                            //{
-                            //    public static FizzEnumerator GetEnumerator(this Fizz e)
-                            //    => default;
-                            //}
                       }"
                 );
 
@@ -932,18 +918,32 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
-                Assert.Collection(
-                    state.Value.Locals,
-                    l => Assert.Equal("a", l.Name)
-                );
+                Assert.Empty(state.Value.Locals);
+                Assert.Empty(state.Value.Parameters);
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // int[], but capturing the enumerator
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "BuiltIn2");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+
+                Assert.Empty(state.Value.Locals);
                 Assert.Empty(state.Value.Parameters);
                 Assert.Collection(
                     state.Value.ImplicitLocals,
-                    l => Assert.Equal("int[]", l.ToString()),
-                    l => Assert.Equal("int", l.ToString())
+                    l => Assert.Equal("System.Collections.IEnumerator", l.ToString())
                 );
                 Assert.False(state.Value.ThisIsReferenced);
             }
@@ -957,13 +957,28 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
-                Assert.Collection(
-                    state.Value.Locals,
-                    l => Assert.Equal("a", l.Name)
-                );
+                Assert.Empty(state.Value.Locals);
+                Assert.Empty(state.Value.Parameters);
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // interface, but capturing the enumerator
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Interface2");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+
+                Assert.Empty(state.Value.Locals);
                 Assert.Empty(state.Value.Parameters);
                 Assert.Collection(
                     state.Value.ImplicitLocals,
@@ -981,13 +996,28 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
 
-                Assert.Collection(
-                    state.Value.Locals,
-                    l => Assert.Equal("a", l.Name)
-                );
+                Assert.Empty(state.Value.Locals);
+                Assert.Empty(state.Value.Parameters);
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // duck typed, but capturing the enumerator
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "DuckTyped2");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+
+                Assert.Empty(state.Value.Locals);
                 Assert.Empty(state.Value.Parameters);
                 Assert.Collection(
                     state.Value.ImplicitLocals,
@@ -995,30 +1025,6 @@ namespace AsyncSizeAnalyzer.Tests
                 );
                 Assert.False(state.Value.ThisIsReferenced);
             }
-
-            // extensions
-            //{
-            //    var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Extension");
-
-            //    var statements = mtd.Body?.Statements;
-            //    Assert.NotNull(statements);
-
-            //    var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
-
-            //    var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
-            //    Assert.NotNull(state);
-
-            //    Assert.Collection(
-            //        state.Value.Locals,
-            //        l => Assert.Equal("a", l.Name)
-            //    );
-            //    Assert.Empty(state.Value.Parameters);
-            //    Assert.Collection(
-            //        state.Value.ImplicitLocals,
-            //        l => Assert.Equal("Foo.FizzEnumerator", l.ToString())
-            //    );
-            //    Assert.False(state.Value.ThisIsReferenced);
-            //}
         }
 
         [Fact]
@@ -1058,7 +1064,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Empty(state.Value.Locals);
                 Assert.Collection(
@@ -1103,7 +1109,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Empty(state.Value.Locals);
                 Assert.Empty(state.Value.Parameters);
@@ -1204,7 +1210,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Empty(state.Value.Locals);
                 Assert.Collection(
@@ -1224,7 +1230,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Collection(
                     state.Value.Locals,
@@ -1247,7 +1253,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Collection(
                     state.Value.Locals.OrderBy(o => o.Name),
@@ -1268,7 +1274,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Collection(
                     state.Value.Locals,
@@ -1316,7 +1322,7 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Empty(state.Value.Locals);
                 Assert.Empty(state.Value.Parameters);
@@ -1363,13 +1369,410 @@ namespace AsyncSizeAnalyzer.Tests
 
                 var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
 
-                var state = Analyzer.StateNeededAfterExpression(mtd, awaitStatement, model);
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
                 Assert.NotNull(state);
                 Assert.Empty(state.Value.Locals);
                 Assert.Collection(
                     state.Value.Parameters,
                     a => Assert.Equal("a", a.Name)
                 );
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.True(state.Value.ThisIsReferenced);
+            }
+        }
+
+        [Fact]
+        public async Task NestedTryCatchFinallyAsync()
+        {
+            var comp =
+                await TestHelpers.GetCompilationAsync(
+                    @"namespace Foo
+                      {
+                            class Bar
+                            {
+                                async System.Threading.Tasks.Task Fizz(int a, int b, int c)
+                                {                
+                                    try
+                                    {
+                                        System.Console.WriteLine(a);
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                    catch(System.ArgumentException)
+                                    {
+                                        System.Console.WriteLine(b);
+                                    }
+                                    catch
+                                    {
+                                        System.Console.WriteLine(c);
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task Buzz(int a, int b, int c)
+                                {                
+                                    try
+                                    {
+                                        System.Console.WriteLine(a);
+                                    }
+                                    catch(System.ArgumentException)
+                                    {
+                                        System.Console.WriteLine(b);
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                    catch
+                                    {
+                                        System.Console.WriteLine(c);
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task Hello(int a, int b, int c)
+                                {                
+                                    try
+                                    {
+                                        System.Console.WriteLine(a);
+                                    }
+                                    catch(System.ArgumentException)
+                                    {
+                                        System.Console.WriteLine(b);
+                                    }
+                                    catch
+                                    {
+                                        System.Console.WriteLine(c);
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task World(int a, int b, int c)
+                                {                
+                                    try
+                                    {
+                                        System.Console.WriteLine(a);
+                                    }
+                                    catch(System.ArgumentException e)
+                                    {
+                                        try
+                                        {
+                                            System.Console.WriteLine(b);
+                                            await System.Threading.Tasks.Task.Yield();
+                                        }
+                                        catch(System.ArgumentException)
+                                        {
+                                            System.Console.WriteLine(e);
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        System.Console.WriteLine(c);
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task Ice(int a, int b, int c)
+                                {                
+                                    try
+                                    {
+                                        System.Console.WriteLine(a);
+                                    }
+                                    catch(System.ArgumentException e)
+                                    {
+                                        try
+                                        {
+                                            System.Console.WriteLine(b);
+                                        }
+                                        finally
+                                        {
+                                            System.Console.WriteLine(e);
+                                            await System.Threading.Tasks.Task.Yield();
+                                        }
+                                    }
+                                    finally
+                                    {
+                                        System.Console.WriteLine(c);
+                                    }
+                                }
+                            }
+                      }"
+                );
+
+            var tree = Assert.Single(comp.SyntaxTrees);
+            var root = tree.GetRoot();
+
+            var model = comp.GetSemanticModel(tree);
+
+            // Fizz
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Fizz");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Empty(state.Value.Locals);
+                Assert.Collection(
+                    state.Value.Parameters,
+                    a => Assert.Equal("b", a.Name),
+                    a => Assert.Equal("c", a.Name)
+                );
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // Buzz
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Buzz");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Empty(state.Value.Locals);
+                Assert.Collection(
+                    state.Value.Parameters,
+                    a => Assert.Equal("c", a.Name)
+                );
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // Hello
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Hello");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Empty(state.Value.Locals);
+                Assert.Empty(state.Value.Parameters);
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // World
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "World");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Collection(
+                    state.Value.Locals,
+                    l => Assert.Equal("e", l.Name)
+                );
+                Assert.Collection(
+                    state.Value.Parameters,
+                    p => Assert.Equal("c", p.Name)
+                );
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // Ice
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Ice");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Empty(state.Value.Locals);
+                Assert.Collection(
+                    state.Value.Parameters,
+                    p => Assert.Equal("c", p.Name)
+                );
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+        }
+
+        [Fact]
+        public async Task UsingBlocksAsync()
+        {
+            var comp =
+               await TestHelpers.GetCompilationAsync(
+                   @"namespace Foo
+                      {
+                            class Bar
+                            {
+                                async System.Threading.Tasks.Task Fizz(System.Collections.Generic.List<int> a)
+                                {                
+                                    using(var e = a.GetEnumerator())
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task Buzz(System.Collections.Generic.List<int> a)
+                                {                
+                                    using(a.GetEnumerator())
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task Hello(System.Func<System.IO.MemoryStream> a)
+                                {                
+                                    await using(var e = a())
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                }
+
+                                async System.Threading.Tasks.Task World(System.Func<System.IO.MemoryStream> a)
+                                {                
+                                    await using(a())
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+                                }
+                            }
+                      }"
+               );
+
+            var tree = Assert.Single(comp.SyntaxTrees);
+            var root = tree.GetRoot();
+
+            var model = comp.GetSemanticModel(tree);
+
+            // Fizz
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Fizz");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Collection(
+                    state.Value.Locals,
+                    l => Assert.Equal("e", l.Name)
+                );
+                Assert.Empty(state.Value.Parameters);
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // Buzz
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Buzz");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Empty(state.Value.Locals);
+                Assert.Empty(state.Value.Parameters);
+                Assert.Collection(
+                    state.Value.ImplicitLocals,
+                    l => Assert.Equal("System.Collections.Generic.List<int>.Enumerator", l.ToString())
+                );
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // Hello
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Hello");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Collection(
+                    state.Value.Locals,
+                    l => Assert.Equal("e", l.Name)
+                );
+                Assert.Empty(state.Value.Parameters);
+                Assert.Empty(state.Value.ImplicitLocals);
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+
+            // World
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "World");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Empty(state.Value.Locals);
+                Assert.Empty(state.Value.Parameters);
+                Assert.Collection(
+                    state.Value.ImplicitLocals,
+                    l => Assert.Equal("System.IO.MemoryStream", l.ToString())
+                );
+                Assert.False(state.Value.ThisIsReferenced);
+            }
+        }
+
+        [Fact]
+        public async Task UsingStatementAsync()
+        {
+            var comp =
+                await TestHelpers.GetCompilationAsync(
+                    @"namespace Foo
+                      {
+                            class Bar
+                            {
+                                async System.Threading.Tasks.Task Fizz(System.Collections.Generic.List<int> a)
+                                {                
+                                    using var e = a.GetEnumerator();
+
+                                    {
+                                        await System.Threading.Tasks.Task.Yield();
+                                    }
+
+                                    System.Console.WriteLine();
+                                }
+                            }
+                      }"
+                );
+
+            var tree = Assert.Single(comp.SyntaxTrees);
+            var root = tree.GetRoot();
+
+            var model = comp.GetSemanticModel(tree);
+
+            // Fizz
+            {
+                var mtd = Assert.Single(root.DescendantNodesAndSelf().OfType<MethodDeclarationSyntax>(), m => m.Identifier.ValueText == "Fizz");
+
+                var statements = mtd.Body?.Statements;
+                Assert.NotNull(statements);
+
+                var awaitStatement = Assert.Single(mtd.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>());
+
+                var state = Analyzer.StateNeededAfterExpression((IAwaitOperation)model.GetOperation(awaitStatement));
+                Assert.NotNull(state);
+                Assert.Collection(
+                    state.Value.Locals,
+                    l => Assert.Equal("e", l.Name)
+                );
+                Assert.Empty(state.Value.Parameters);
                 Assert.Empty(state.Value.ImplicitLocals);
                 Assert.False(state.Value.ThisIsReferenced);
             }

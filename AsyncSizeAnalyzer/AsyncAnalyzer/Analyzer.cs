@@ -2,6 +2,8 @@
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.FlowAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -58,7 +60,7 @@ namespace AsyncSizeAnalyzer
             var opts = obj.Options;
             var configFile = opts.AdditionalFiles.SingleOrDefault(x => x.Path.EndsWith("ASA.txt"));
 
-            if(configFile != null)
+            if (configFile != null)
             {
                 var text = configFile.GetText()?.ToString() ?? "";
 
@@ -77,90 +79,47 @@ namespace AsyncSizeAnalyzer
 
             MaxSizeBytes = MaxSizeBytes ?? maximumSize ?? DEFAULT_MAX_SIZE_BYTES;
 
-            obj.RegisterSyntaxNodeAction(OnMethodDeclaration, ImmutableArray.Create(SyntaxKind.MethodDeclaration, SyntaxKind.LocalFunctionStatement));
+            obj.RegisterOperationAction(OnMethodOperation, OperationKind.MethodBody);
         }
 
-        private void OnMethodDeclaration(SyntaxNodeAnalysisContext obj)
+        private void OnMethodOperation(OperationAnalysisContext obj)
         {
-            BlockSyntax? body = null;
-            ExpressionSyntax? expBody = null;
+            var body = (IMethodBodyOperation)obj.Operation;
 
-            if (obj.Node is BaseMethodDeclarationSyntax mtdDecl)
+            var declaringType = body.Syntax.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().FirstOrDefault();
+            if (declaringType == null)
             {
-                if (!mtdDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword)))
-                {
-                    return;
-                }
-
-                body = mtdDecl.Body;
-                expBody = mtdDecl.ExpressionBody?.Expression;
+                // todo: technically an error?
+                return;
             }
-            else if (obj.Node is LocalFunctionStatementSyntax locFuncDecl)
-            {
-                if (!locFuncDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword)))
-                {
-                    return;
-                }
 
-                body = locFuncDecl.Body;
-                expBody = locFuncDecl.ExpressionBody?.Expression;
-            }
-            else
+            var containingType = obj.Operation.SemanticModel.GetDeclaredSymbol(declaringType);
+            if (containingType == null)
             {
-                throw new InvalidOperationException("What?");
+                // todo: technically an error?
+                return;
             }
 
             int maximumSize = MaxSizeBytes ?? DEFAULT_MAX_SIZE_BYTES;
 
-            SyntaxNode first, last;
-            IEnumerable<AwaitExpressionSyntax> awaitPoints;
-
-            if (body != null)
-            {
-                if (body.Statements.Count == 0)
-                {
-                    return;
-                }
-
-                first = body.Statements.First();
-                last = body.Statements.Last();
-                awaitPoints = body.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>();
-            }
-            else if (expBody != null)
-            {
-                first = last = expBody;
-                awaitPoints = expBody.DescendantNodesAndSelf().OfType<AwaitExpressionSyntax>();
-            }
-            else
-            {
-                return;
-            }
-
-            var model = obj.SemanticModel;
-
-            var mtdSymbol = model.GetDeclaredSymbol(obj.Node);
-            if (mtdSymbol?.ContainingType == null)
-            {
-                // todo: technically an error case?
-                return;
-            }
+            var awaitPoints = body.DescendantsAndSelf().OfType<IAwaitOperation>();
 
             foreach (var awaitExp in awaitPoints)
             {
-                var postAwaitState = StateNeededAfterExpression(obj.Node, awaitExp, model);
+                var postAwaitState = StateNeededAfterExpression(awaitExp);
                 if (postAwaitState == null)
                 {
                     // todo: technically an error case?
                     continue;
                 }
 
-                var (estimatedBytes, log) = EstimateBytesForStateMachine(mtdSymbol.ContainingType, postAwaitState.Value);
+                var (estimatedBytes, log) = EstimateBytesForStateMachine(containingType, postAwaitState.Value);
 
                 if (estimatedBytes > maximumSize)
                 {
                     obj.ReportDiagnostic(
                         CreateDiagnostic(
-                            awaitExp.GetLocation(),
+                            awaitExp.Syntax.GetLocation(),
                             estimatedBytes,
                             maximumSize,
                             log
@@ -260,986 +219,416 @@ namespace AsyncSizeAnalyzer
         )
         => Diagnostic.Create(AsyncStateMachineExceedsConfiguredWarningSize, loc, new object[] { captured, max, log });
 
-        /// <summary>
-        /// Takes a bunch of syntax nodes, and figures out variables, parameters, and if `this`
-        /// are used in the syntax nodes _between_ those nodes
-        /// </summary>
-        private sealed class Visitor : CSharpSyntaxWalker
+        public static
+            (ImmutableList<ILocalSymbol> Locals, ImmutableList<IParameterSymbol> Parameters, ImmutableList<ITypeSymbol> ImplicitLocals, bool ThisIsReferenced)?
+            StateNeededAfterExpression(IAwaitOperation awaitOp)
         {
-            private readonly SemanticModel Model;
-            private readonly ITypeSymbol ContainingType;
+            var (reachableOperations, localsNeedCapture, capturedImplicitTypes) = OperationsReachableAfterAsyncExpression(awaitOp);
+            var allOperations = reachableOperations.SelectMany(r => r.DescendantsAndSelf()).Distinct().ToImmutableList();
 
-            private ImmutableHashSet<ILocalSymbol>.Builder Variables;
-            private ImmutableHashSet<IParameterSymbol>.Builder Parameters;
-            private bool IsThisReferenced;
+            var parameters = allOperations.OfType<IParameterReferenceOperation>().Select(l => l.Parameter).Distinct().ToImmutableList();
 
-            public (ImmutableList<ILocalSymbol> Locals, ImmutableList<IParameterSymbol> Parameters, bool ThisIsReferenced) Results
-            => (Variables.ToImmutableList(), Parameters.ToImmutableList(), IsThisReferenced);
+            var thisReferences = allOperations.OfType<IInstanceReferenceOperation>().ToImmutableList();
 
-            public Visitor(SemanticModel model, ITypeSymbol containingType)
-            {
-                Model = model;
-                ContainingType = containingType;
+            var referencesThis = thisReferences.Any();
 
-                IsThisReferenced = false;
-                Variables = ImmutableHashSet.CreateBuilder<ILocalSymbol>();
-                Parameters = ImmutableHashSet.CreateBuilder<IParameterSymbol>();
-            }
-
-            public override void VisitThisExpression(ThisExpressionSyntax node)
-            {
-                IsThisReferenced = true;
-
-                base.VisitThisExpression(node);
-            }
-
-            public override void VisitIdentifierName(IdentifierNameSyntax node)
-            {
-                var sym = Model.GetSymbolInfo(node);
-                if (sym.Symbol is ILocalSymbol local)
-                {
-                    Variables.Add(local);
-                }
-                else if (sym.Symbol is IParameterSymbol param)
-                {
-                    Parameters.Add(param);
-                }
-                else if (sym.Symbol is IFieldSymbol field)
-                {
-                    IsThisReferenced |= !field.IsStatic && IsOnContainingType(field.ContainingType) && !node.Ancestors().OfType<MemberAccessExpressionSyntax>().Any();
-                }
-                else if (sym.Symbol is IMethodSymbol mtd)
-                {
-                    IsThisReferenced |= !mtd.IsStatic && IsOnContainingType(mtd.ContainingType) && !node.Ancestors().OfType<MemberAccessExpressionSyntax>().Any();
-                }
-                else if (sym.Symbol is IPropertySymbol prop)
-                {
-                    IsThisReferenced |= !prop.IsStatic && IsOnContainingType(prop.ContainingType) && !node.Ancestors().OfType<MemberAccessExpressionSyntax>().Any();
-                }
-                else if (sym.Symbol is IEventSymbol evt)
-                {
-                    IsThisReferenced |= !evt.IsStatic && IsOnContainingType(evt.ContainingType) && !node.Ancestors().OfType<MemberAccessExpressionSyntax>().Any();
-                }
-
-                base.VisitIdentifierName(node);
-
-                bool IsOnContainingType(ITypeSymbol? memberOnType)
-                {
-                    if (memberOnType == null)
-                    {
-                        return false;
-                    }
-
-                    var conversion = Model.Compilation.ClassifyConversion(ContainingType, memberOnType);
-                    return conversion.IsIdentity || conversion.IsImplicit;
-                }
-            }
+            return (localsNeedCapture, parameters, capturedImplicitTypes, referencesThis);
         }
 
-        // todo: naming is a bit weird here, these are statements or expressions technically (but I just say expression, because that's going to be what async is)
-
-        public static (ImmutableList<ILocalSymbol> Locals, ImmutableList<IParameterSymbol> Parameters, ImmutableList<ITypeSymbol> ImplicitLocals, bool ThisIsReferenced)? StateNeededAfterExpression(SyntaxNode mtd, SyntaxNode entryNode, SemanticModel model)
+        public static (ImmutableList<IOperation> Operations, ImmutableList<ILocalSymbol> LocalsToCapture, ImmutableList<ITypeSymbol> ImplicitCaptures) OperationsReachableAfterAsyncExpression(IAwaitOperation entryNode)
         {
-            var mtdSymbol = model.GetDeclaredSymbol(mtd);
-            if (mtdSymbol?.ContainingType == null)
+            // control flow can't start at an expression (le sigh)
+            var inMethod = GetContaining<IMethodBodyOperation>(entryNode);
+
+            var inLocalFunc = GetContaining<ILocalFunctionOperation>(entryNode);
+
+            ImmutableArray<BasicBlock> methodBlocks;
+            if (inMethod != null)
             {
-                // todo: error condition
-                return null;
-            }
+                var methodGraph = ControlFlowGraph.Create(inMethod);
 
-            var introducesVariable = entryNode.AncestorsAndSelf().OfType<VariableDeclaratorSyntax>().SingleOrDefault();
-
-            var visitor = new Visitor(model, mtdSymbol.ContainingType);
-
-            var implicits = ImmutableList.CreateBuilder<ITypeSymbol>();
-
-            var reachedDeclarations = ImmutableHashSet.CreateBuilder<VariableDeclaratorSyntax>();
-            var reachedCatchClauses = ImmutableHashSet.CreateBuilder<CatchDeclarationSyntax>();
-
-            if (introducesVariable != null)
-            {
-                // sigh, special case!
-                // if it's in the initializer of a for loop, it doesn't count!
-
-                var inForLoop = entryNode.Ancestors().OfType<ForStatementSyntax>().SingleOrDefault(x => x.Declaration!= null && x.Declaration.DescendantNodesAndSelf().Contains(introducesVariable));
-
-                if (inForLoop == null)
+                if (inLocalFunc != null)
                 {
-                    reachedDeclarations.Add(introducesVariable);
-                }
-            }
-
-            var reachableNodes = NodesReachableAfterExpression(entryNode, model);
-
-            foreach (var reachableNode in reachableNodes)
-            {
-                if (reachableNode.Parent is ForEachStatementSyntax foreachStatement && reachableNode == foreachStatement.Expression)
-                {
-                    // foreach is special, in that the thing actually captured is the _enumerator_
-                    var nodeType = model.GetTypeInfo(reachableNode);
-                    if (nodeType.Type != null)
-                    {
-                        // todo: this doesn't handle non-generic GetEnumerator()
-                        //       ... and is just kind of hacky in general
-
-                        // todo: for c# 9, GetEnumerator can also be an extension method...
-
-                        var concreteEnumerators =
-                            nodeType.Type
-                                .GetMembers("GetEnumerator")
-                                .OfType<IMethodSymbol>()
-                                .Where(x => !x.Parameters.Any() && !x.ReturnsVoid);
-                        var interfaceEnumerator =
-                            concreteEnumerators
-                                .SingleOrDefault(x => x.ReturnType is INamedTypeSymbol namedType && namedType.IsGenericType && namedType.ConstructUnboundGenericType().Name == "System.Collections.Generic.IEnumerator<T>");
-                        var duckTypedEnumerator =
-                            concreteEnumerators.Except(new[] { interfaceEnumerator }).SingleOrDefault();
-
-                        var enumeratorToUse = duckTypedEnumerator ?? interfaceEnumerator;
-
-                        if (enumeratorToUse == null)
-                        {
-                            // implies this is a built-in enumeratable (array, string, or something)
-                            if (nodeType.Type.SpecialType == SpecialType.System_String)
-                            {
-                                // string actually stashs a char[]
-                                var c = model.Compilation.GetSpecialType(SpecialType.System_Char);
-                                var cArr = model.Compilation.CreateArrayTypeSymbol(c);
-                                implicits.Add(cArr);
-                            }
-                            else
-                            {
-                                implicits.Add(nodeType.Type);
-                            }
-
-                            // and then an int local to track position
-                            implicits.Add(model.Compilation.GetSpecialType(SpecialType.System_Int32));
-                        }
-                        else
-                        {
-                            implicits.Add(enumeratorToUse.ReturnType);
-                        }
-                    }
+                    var funcGraph = methodGraph.GetLocalFunctionControlFlowGraphInScope(inLocalFunc.Symbol);
+                    methodBlocks = funcGraph.Blocks;
                 }
                 else
                 {
-                    foreach (var varDecl in reachableNode.DescendantNodesAndSelf().OfType<VariableDeclaratorSyntax>())
-                    {
-                        reachedDeclarations.Add(varDecl);
-                    }
-
-                    foreach (var excDecl in reachableNode.DescendantNodesAndSelf().OfType<CatchDeclarationSyntax>())
-                    {
-                        reachedCatchClauses.Add(excDecl);
-                    }
-
-                    visitor.Visit(reachableNode);
+                    methodBlocks = methodGraph.Blocks;
                 }
-            }
-
-            var (ls, ps, hasThis) = visitor.Results;
-
-            var declaredAfterEntryNode = reachedDeclarations.ToImmutable();
-            var catchesReachableAfterEntryNode = reachedCatchClauses.ToImmutable();
-            var reachableButAlsoDeclared = ls.Where(l => declaredAfterEntryNode.Contains(l.DeclaringSyntaxReferences.Single().GetSyntax())).ToImmutableList();
-            var reachableCatchClauses = ls.Where(l => catchesReachableAfterEntryNode.Contains(l.DeclaringSyntaxReferences.Single().GetSyntax())).ToImmutableList();
-
-            var filteredLocals = ls.Except(reachableButAlsoDeclared).Except(reachableCatchClauses).ToImmutableList();
-
-            return (filteredLocals, ps, implicits.ToImmutable(), hasThis);
-        }
-
-        public static ImmutableList<SyntaxNode> NodesReachableAfterExpression(SyntaxNode entryNode, SemanticModel model)
-        => NodesReachableAfterExpressionImpl(entryNode, model, new HashSet<SyntaxNode>()).Distinct().ToImmutableList();
-
-        internal static ImmutableList<SyntaxNode> NodesReachableAfterExpressionImpl(SyntaxNode entryNode, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-        {
-            // possibilities:
-            //   - entryNode is a statement
-            //     * if it is a statement, everything after it in it's containing block is reachable
-            //   - entryNode is an expression
-            //     * most expression progress left to right, so everything _after_ entryNode needs to be handled
-            //     * however, ternary (a ? b : c) expressions are special
-            //       + if entry is in a, both b and c are reachable
-            //       + if entry is in b or c, only they are reachable
-            //     * if, & switch are also special, since all of their branches are reachable
-            //
-            // additionally, the statement entryNode is in a block
-            //   - that block has fallthrough, so we should include anything _after_ that block
-            //   - however, if it is in a for, foreach, while, or do while then we need to include some of the conditions
-            //
-            // when in loops, we have to look for continues and gotos 
-
-            ImmutableList<SyntaxNode> basicRet;
-
-            // starting at a whole statement
-            if (entryNode is StatementSyntax statement)
-            {
-                basicRet = HandleStatement(statement, model, alreadyVisited);
             }
             else
             {
-                // we're in an expression
-                basicRet = HandleExpression(entryNode, model, alreadyVisited);
+                return (ImmutableList<IOperation>.Empty, ImmutableList<ILocalSymbol>.Empty, ImmutableList<ITypeSymbol>.Empty);
             }
 
-            // now that we've found everything "normally" we need to handle all the try/catch/finally clauses that cover the reachable nodes
-            var ret = ImmutableList.CreateBuilder<SyntaxNode>();
+            var operationsInOrderVisited = ImmutableList.CreateBuilder<IOperation>();
 
-            // but, special case, the entryNode is actually considered reachable for this (since every try/catch/finally follows)
-            ret.AddRange(HandleBeingInTryCatchFinally(entryNode, model, alreadyVisited));
+            var entryOperationInitializesLocals = ImmutableList.CreateBuilder<ILocalSymbol>();
+            var entryOperationInitializesCaptures = ImmutableList.CreateBuilder<CaptureId>();
 
-            foreach (var node in basicRet)
+
+            // check to see if the op is in any block bodies
+            var blocksWithEntryNodeInBody = methodBlocks.Where(b => b.Operations.Any(o => ContainsOperation(o, entryNode))).OrderBy(x => x.Ordinal);
+            foreach (var blockWithEntryNodeInBody in blocksWithEntryNodeInBody)
             {
-                ret.Add(node);
-                ret.AddRange(HandleBeingInTryCatchFinally(node, model, alreadyVisited));
+                var entryNodeIndex = blockWithEntryNodeInBody.Operations.Select((o, ix) => (o, ix)).Single(t => ContainsOperation(t.o, entryNode)).ix;
+                var operationWithEntryNode = blockWithEntryNodeInBody.Operations[entryNodeIndex];
+
+                var lowestOperationWithEntryNode = GetLowestChildContaining(operationWithEntryNode, entryNode, 0);
+                var entryNodeOperationForReachability = lowestOperationWithEntryNode.Operation;
+
+                GetOperationsFromBlockContainingEntryNode(operationsInOrderVisited, blockWithEntryNodeInBody, methodBlocks, entryNodeOperationForReachability, operationWithEntryNode);
+
+                // include everything after the op
+                var afterEntryNode = blockWithEntryNodeInBody.Operations.Skip(entryNodeIndex + 1);
+                operationsInOrderVisited.AddRange(afterEntryNode);
+
+                if (operationWithEntryNode is IAssignmentOperation assignOp)
+                {
+                    entryOperationInitializesLocals.AddRange(operationWithEntryNode.DescendantsAndSelf().OfType<ILocalReferenceOperation>().Select(l => l.Local));
+                }
+
+                if (operationWithEntryNode is IFlowCaptureOperation captureOp)
+                {
+                    entryOperationInitializesCaptures.Add(captureOp.Id);
+                }
             }
 
-            return ret.ToImmutable();
-
-            static ImmutableList<SyntaxNode> HandleCatchClause(CatchClauseSyntax inCatch, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
+            // check to see if the op is in any conditions
+            var blocksWithEntryNodeInCondition = methodBlocks.Where(b => b.BranchValue != null && ContainsOperation(b.BranchValue, entryNode)).OrderBy(x => x.Ordinal);
+            foreach (var blockWithEntryNodeInCondition in blocksWithEntryNodeInCondition)
             {
-                if (!alreadyVisited.Add(inCatch))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
+                var operationWithEntryNode = blockWithEntryNodeInCondition.BranchValue;
 
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
+                var lowestOperationContaining = GetLowestChildContaining(operationWithEntryNode, entryNode, 0);
+                var entryNodeOperationForReachability = lowestOperationContaining.Operation;
 
-                if (inCatch.Declaration != null)
-                {
-                    ret.Add(inCatch.Declaration);
-                }
-
-                var followingCatchBlock = inCatch.Block;
-                if (followingCatchBlock.Statements.Any())
-                {
-                    var firstEntry = followingCatchBlock.Statements[0];
-                    ret.Add(firstEntry);
-                    ret.AddRange(HandleStatement(firstEntry, model, alreadyVisited));
-                }
-
-                return ret.ToImmutable();
+                GetOperationsFromBlockContainingEntryNode(operationsInOrderVisited, blockWithEntryNodeInCondition, methodBlocks, entryNodeOperationForReachability, operationWithEntryNode);
             }
 
-            static ImmutableList<SyntaxNode> HandleFinallyClause(FinallyClauseSyntax inFinally, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
+            var ops = operationsInOrderVisited.ToImmutable();
+
+            var localsFromEntryNode = entryOperationInitializesLocals.ToImmutable();
+            var capturesFromEntryNode = entryOperationInitializesCaptures.ToImmutableList();
+
+            var (locals, captureIds) = GetLocalAndCapturesUsedBeforeAssigned(ops, localsFromEntryNode, capturesFromEntryNode);
+
+            var allFlowCaptures = methodBlocks.SelectMany(b => b.Operations).SelectMany(o => o.DescendantsAndSelf()).OfType<IFlowCaptureOperation>().Distinct().ToImmutableList();
+            var capturesNeedCapture = captureIds.Select(i => allFlowCaptures.Single(f => f.Id.Equals(i)).Value.Type).ToImmutableList();
+
+            return (operationsInOrderVisited.ToImmutable(), locals, capturesNeedCapture);
+
+            static (ImmutableList<ILocalSymbol> Locals, ImmutableList<CaptureId> ImplicitCaptures) GetLocalAndCapturesUsedBeforeAssigned(
+                ImmutableList<IOperation> ops,
+                ImmutableList<ILocalSymbol> alreadyAssignedLocals,
+                ImmutableList<CaptureId> alreadyCaptured
+            )
             {
-                if (!alreadyVisited.Add(inFinally))
+                var pending = new Stack<IOperation>();
+                foreach (var op in ops.Reverse())
                 {
-                    return ImmutableList<SyntaxNode>.Empty;
+                    pending.Push(op);
                 }
 
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                var finallyBlock = inFinally.Block;
-                if (finallyBlock.Statements.Any())
+                var locNeedCapture = ImmutableHashSet.CreateBuilder<ILocalSymbol>();
+                var locAssigned = ImmutableHashSet.CreateBuilder<ILocalSymbol>();
+                foreach (var loc in alreadyAssignedLocals)
                 {
-                    var firstEntry = finallyBlock.Statements[0];
-                    ret.Add(firstEntry);
-                    ret.AddRange(HandleStatement(firstEntry, model, alreadyVisited));
+                    locAssigned.Add(loc);
                 }
 
-                return ret.ToImmutable();
-            }
-
-            static ImmutableList<SyntaxNode> HandleBeingInTryCatchFinally(SyntaxNode node, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                // don't check if we handled the node, because try/catch/finally isn't necessarily found the way other nodes are
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                var inTryBlocks = node.Ancestors().OfType<BlockSyntax>().Where(b => b.Parent is TryStatementSyntax).Select(b => b.Parent).OfType<TryStatementSyntax>();
-                foreach (var inTryBlock in inTryBlocks)
+                var captureNeedCapture = ImmutableHashSet.CreateBuilder<CaptureId>();
+                var captureAssigned = ImmutableHashSet.CreateBuilder<CaptureId>();
+                foreach (var capture in alreadyCaptured)
                 {
-                    foreach (var inCatch in inTryBlock.Catches)
-                    {
-                        // include the declaration, because then we'll toss it since it's declared in that scope
-                        ret.AddRange(HandleCatchClause(inCatch, model, alreadyVisited));
-                    }
-
-                    if (inTryBlock.Finally != null)
-                    {
-                        ret.AddRange(HandleFinallyClause(inTryBlock.Finally, model, alreadyVisited));
-                    }
+                    captureAssigned.Add(capture);
                 }
 
-                // if we're already in a catch, we need to visit the _following_ catches (and the try)
-                var inCatches = node.Ancestors().OfType<CatchClauseSyntax>();
-                foreach (var inCatch in inCatches)
+                while (pending.Count > 0)
                 {
-                    var correspondingTry = inCatch.Ancestors().OfType<TryStatementSyntax>().FirstOrDefault();
-                    if (correspondingTry == null)
+                    var curOp = pending.Pop();
+                    if (curOp is ILocalReferenceOperation locRef)
                     {
-                        // technically an error case
-                        return ImmutableList<SyntaxNode>.Empty;
-                    }
-
-                    var catchIndex = correspondingTry.Catches.IndexOf(inCatch);
-                    var followingCatches = correspondingTry.Catches.Skip(catchIndex + 1);
-
-                    foreach (var followingCatch in followingCatches)
-                    {
-                        ret.AddRange(HandleCatchClause(followingCatch, model, alreadyVisited));
-                    }
-
-                    if (correspondingTry.Finally != null)
-                    {
-                        ret.AddRange(HandleFinallyClause(correspondingTry.Finally, model, alreadyVisited));
-                    }
-                }
-
-                return ret.ToImmutable();
-            }
-
-            static ImmutableList<SyntaxNode> HandleExpression(SyntaxNode expression, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                if (!alreadyVisited.Add(expression))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                var cur = expression;
-                while (cur != null && !(cur is StatementSyntax))
-                {
-                    var parent = cur.Parent;
-                    if (parent == null)
-                    {
-                        throw new Exception("Shouldn't be possible?");
-                    }
-
-                    bool hasSpecialTreatment;
-
-                    if (parent is ConditionalExpressionSyntax condExp)
-                    {
-                        hasSpecialTreatment = true;
-
-                        if (condExp.Condition == cur)
+                        if (locAssigned.Add(locRef.Local))
                         {
-                            // this is `expression ? a : b` => a & b are reachable
-                            ret.Add(condExp.WhenTrue);
-                            ret.Add(condExp.WhenFalse);
+                            // first time we've seen it, means it wasn't initialized in these ops... so we need to capture it
+                            locNeedCapture.Add(locRef.Local);
                         }
                     }
-                    else if (parent is IfStatementSyntax ifStatement)
+                    else if (curOp is IAssignmentOperation assignOp)
                     {
-                        hasSpecialTreatment = true;
-
-                        if (ifStatement.Condition == cur)
+                        var initializedRefs = assignOp.Target.DescendantsAndSelf().OfType<ILocalReferenceOperation>();
+                        foreach (var initializedRef in initializedRefs)
                         {
-                            // this is `if(expression) { a } else { b }` => a & b are reachable
-                            ret.Add(ifStatement.Statement);
-                            if (ifStatement.Else?.Statement != null)
-                            {
-                                ret.Add(ifStatement.Else.Statement);
-                            }
-                        }
-                    }
-                    else if (parent is SwitchStatementSyntax switchStatement)
-                    {
-                        hasSpecialTreatment = true;
-
-                        if (switchStatement.Expression == cur)
-                        {
-                            // this is `switch(expression) { case ... }` => all cases are reachable
-                            ret.AddRange(switchStatement.Sections);
-                        }
-                    }
-                    else if (parent is SwitchExpressionSyntax switchExp)
-                    {
-                        hasSpecialTreatment = true;
-
-                        if (switchExp.GoverningExpression == cur)
-                        {
-                            // this is `expression switch { blah => ... }` => all arms are reachable
-                            ret.AddRange(switchExp.Arms);
-                        }
-                    }
-                    else if (parent is ForStatementSyntax forStatement)
-                    {
-                        hasSpecialTreatment = true;
-
-                        // for is weird
-                        //   - initializer is not reachable (it's either already happened, or contains the entry node)
-                        //   - condition is reachable if:
-                        //     * the entryNode is the intializer OR
-                        //     * the end of the loop is reachable OR
-                        //     * any continue in the loop is reachable
-                        //   - incr is reachable if:
-                        //     * the end of the loop is reachable OR
-                        //     * any continue in the loop is reachable
-                        //   - body is always reachable
-                        //     * ok not actually, but close enough
-
-                        var initializeContainsEntry = forStatement.Initializers.Any(i => i == cur);
-                        var forMayBeContinued = false;
-                        var forMayFallthrough = false;
-                        StatementSyntax startOfFor;
-                        {
-                            startOfFor = forStatement.Statement;
-                            StatementSyntax endOfFor = forStatement.Statement;
-                            if (startOfFor is BlockSyntax block && block.Statements.Any())
-                            {
-                                startOfFor = block.Statements[0];
-                                endOfFor = block.Statements.Last();
-                            }
-
-                            var fullReachability = model.AnalyzeControlFlow(startOfFor, endOfFor);
-                            if (fullReachability != null && fullReachability.Succeeded && fullReachability.EndPointIsReachable)
-                            {
-                                forMayFallthrough = true;
-                            }
-
-                            var continuesInBody = forStatement.Statement.DescendantNodesAndSelf().OfType<ContinueStatementSyntax>();
-                            foreach (var continueStatement in continuesInBody)
-                            {
-                                var matchingStatement = GetStatementWhichIsContinued(continueStatement);
-                                if (matchingStatement != forStatement)
-                                {
-                                    continue;
-                                }
-
-                                var continueReachability = model.AnalyzeControlFlow(startOfFor, continueStatement);
-                                if (continueReachability != null && continueReachability.Succeeded && continueReachability.EndPointIsReachable)
-                                {
-                                    forMayBeContinued = true;
-                                    break;
-                                }
-                            }
+                            locAssigned.Add(initializedRef.Local);
                         }
 
-                        var conditionIsReachable = initializeContainsEntry || forMayBeContinued || forMayFallthrough;
-                        if (forStatement.Condition != null && conditionIsReachable)
+                        pending.Push(assignOp.Value);
+                    }
+                    else if (curOp is IFlowCaptureReferenceOperation captureRef)
+                    {
+                        if (captureAssigned.Add(captureRef.Id))
                         {
-                            ret.Add(forStatement.Condition);
+                            // first time we've seen it, means it wasn't initialized in these ops... so we need to capture it
+                            captureNeedCapture.Add(captureRef.Id);
                         }
-
-                        var incrementsAreReachable = forMayFallthrough || forMayBeContinued;
-                        if (incrementsAreReachable)
-                        {
-                            foreach (var incr in forStatement.Incrementors)
-                            {
-                                ret.Add(incr);
-                            }
-                        }
-
-                        // shove the body in
-                        ret.Add(startOfFor);
-                        ret.AddRange(HandleStatement(startOfFor, model, alreadyVisited));
                     }
-                    else if (parent is WhileStatementSyntax whileStatement)
+                    else if (curOp is IFlowCaptureOperation captureOp)
                     {
-                        hasSpecialTreatment = true;
+                        captureAssigned.Add(captureOp.Id);
 
-                        var start = StartOfBlockOrStatement(whileStatement.Statement);
-
-                        ret.AddRange(HandleStatement(start, model, alreadyVisited));
-                    }
-                    else if (parent is DoStatementSyntax doStatement)
-                    {
-                        hasSpecialTreatment = true;
-
-                        var start = StartOfBlockOrStatement(doStatement.Statement);
-
-                        ret.AddRange(HandleStatement(start, model, alreadyVisited));
-                    }
-                    else if (parent is ForEachStatementSyntax foreachStatement)
-                    {
-                        hasSpecialTreatment = true;
-
-                        var start = StartOfBlockOrStatement(foreachStatement.Statement);
-
-                        ret.AddRange(HandleStatement(start, model, alreadyVisited));
+                        pending.Push(captureOp.Value);
                     }
                     else
                     {
-                        hasSpecialTreatment = false;
+                        foreach (var child in curOp.Children)
+                        {
+                            pending.Push(child);
+                        }
+                    }
+                }
+
+                return (locNeedCapture.ToImmutableList(), captureNeedCapture.ToImmutableList());
+            }
+
+            static void GetOperationsFromBlockContainingEntryNode(
+                ImmutableList<IOperation>.Builder operationsInExecutionOrder,
+                BasicBlock blockWithEntryNode,
+                ImmutableArray<BasicBlock> methodBlocks,
+                IOperation entryNodeOperationForReachability,
+                IOperation operationWithEntryNode
+            )
+            {
+                var visitedBlocks = ImmutableArray.CreateBuilder<BasicBlock>();
+                visitedBlocks.Add(blockWithEntryNode);
+
+                // get everything _in_ the entryNode operation that happens after the entryNode
+                GetOperationsReachableAfterOperation(operationsInExecutionOrder, entryNodeOperationForReachability, operationWithEntryNode);
+
+                // figure out what happens from falling through (or branching out of) the initial block
+                var subVisitedBlocks = VisitBlocks(operationsInExecutionOrder, blockWithEntryNode, includeOperationsFromFirstBlock: false);
+                foreach (var block in subVisitedBlocks)
+                {
+                    visitedBlocks.Add(block);
+                }
+
+                // figure out what blocks (and operations) get pulled in because of try/catch/finally
+                var opsFromCatchFinally = ImmutableList.CreateBuilder<IOperation>();
+
+                var alreadyVisited = ImmutableHashSet.CreateBuilder<BasicBlock>();
+                var blocksToVisitHandlers = new Stack<BasicBlock>(visitedBlocks);
+                while (blocksToVisitHandlers.Count > 0)
+                {
+                    var block = blocksToVisitHandlers.Pop();
+
+                    var catchFinallyBlocks = GetHandlersVisitedByExisting(block, methodBlocks);
+                    foreach (var subBlock in catchFinallyBlocks)
+                    {
+                        if (!alreadyVisited.Add(subBlock))
+                        {
+                            continue;
+                        }
+
+                        var newlyVisitedBlocks = VisitBlocks(operationsInExecutionOrder, subBlock, true);
+
+                        foreach (var newBlock in newlyVisitedBlocks)
+                        {
+                            blocksToVisitHandlers.Push(newBlock);
+                        }
+                    }
+                }
+            }
+
+            static (IOperation Operation, int Depth) GetLowestChildContaining(IOperation haystack, IOperation needle, int depth)
+            {
+                var best = (Operation: haystack, Depth: depth);
+
+                foreach (var child in haystack.Children)
+                {
+                    if (!ContainsOperation(child, needle))
+                    {
+                        continue;
                     }
 
-                    if (!hasSpecialTreatment)
+                    var lowest = GetLowestChildContaining(child, needle, depth + 1);
+                    if (lowest.Depth > best.Depth)
                     {
-                        var indexInParent = GetIndexInParent(cur);
-                        var siblingsAfterCur = parent.ChildNodes().Skip(indexInParent + 1);
-                        ret.AddRange(siblingsAfterCur);
+                        best = lowest;
+                    }
+                }
+
+                return best;
+            }
+
+            static ImmutableList<BasicBlock> GetHandlersVisitedByExisting(BasicBlock block, ImmutableArray<BasicBlock> allMethodBlocks)
+            {
+                var catchesToVisit = ImmutableList.CreateBuilder<ControlFlowRegion>();
+                var finalliesToVisit = ImmutableList.CreateBuilder<ControlFlowRegion>();
+
+                var cur = block.EnclosingRegion;
+                while (cur.EnclosingRegion != null)
+                {
+                    var parent = cur.EnclosingRegion;
+                    if (parent.Kind == ControlFlowRegionKind.TryAndCatch)
+                    {
+                        var indexOfSelfInSiblings = parent.NestedRegions.IndexOf(cur);
+
+                        var relevantSubRegions =
+                            parent
+                                .NestedRegions
+                                .Skip(indexOfSelfInSiblings + 1)        // skip past ourself, as we've run and earlier blocks are also done
+                                .Where(x => x.Kind == ControlFlowRegionKind.Catch || x.Kind == ControlFlowRegionKind.Filter || x.Kind == ControlFlowRegionKind.FilterAndHandler);
+
+                        catchesToVisit.AddRange(relevantSubRegions);
+                    }
+                    else if (parent.Kind == ControlFlowRegionKind.TryAndFinally)
+                    {
+                        var indexOfSelfInSiblings = parent.NestedRegions.IndexOf(cur);
+
+                        var relevantSubRegions =
+                            parent
+                                .NestedRegions
+                                .Skip(indexOfSelfInSiblings + 1)        // skip past ourself, as we've run and earlier blocks are also done
+                                .Where(x => x.Kind == ControlFlowRegionKind.Finally);
+
+                        finalliesToVisit.AddRange(relevantSubRegions);
                     }
 
                     cur = parent;
                 }
 
-                // we've now walked all the way out to the _statement_ which contains the expression and have included all the siblings to the _right_ of the target
-
-                if (cur is StatementSyntax statement)
+                var blocksToVisit = ImmutableList.CreateBuilder<BasicBlock>();
+                foreach (var catchBlock in catchesToVisit)
                 {
-                    // we need to handle everything that follows the statement that had the target expression
-                    ret.AddRange(HandleStatement(statement, model, alreadyVisited));
+                    var relevantBlocks = allMethodBlocks.Skip(catchBlock.FirstBlockOrdinal).Take(catchBlock.LastBlockOrdinal - catchBlock.FirstBlockOrdinal + 1);
+
+                    blocksToVisit.AddRange(relevantBlocks);
                 }
 
-                return ret.ToImmutable();
+                foreach (var finallyBlock in finalliesToVisit)
+                {
+                    var relevantBlocks = allMethodBlocks.Skip(finallyBlock.FirstBlockOrdinal).Take(finallyBlock.LastBlockOrdinal - finallyBlock.FirstBlockOrdinal + 1);
+
+                    blocksToVisit.AddRange(relevantBlocks);
+                }
+
+                return blocksToVisit.ToImmutable();
             }
 
-            static StatementSyntax StartOfBlockOrStatement(StatementSyntax statement)
+            static ImmutableList<BasicBlock> VisitBlocks(
+                ImmutableList<IOperation>.Builder operationsInExuectionOrder,
+                BasicBlock entryBlock,
+                bool includeOperationsFromFirstBlock
+             )
             {
-                if (statement is BlockSyntax block && block.Statements.Any())
+                var visited = ImmutableHashSet.CreateBuilder<BasicBlock>();
+
+                var toExit = new Stack<BasicBlock>();
+                toExit.Push(entryBlock);
+
+                var includeAllOperations = includeOperationsFromFirstBlock;
+
+                while (toExit.Count > 0)
                 {
-                    return block.Statements[0];
+                    var cur = toExit.Pop();
+
+                    if (!cur.IsReachable)
+                    {
+                        continue;
+                    }
+
+                    if (includeAllOperations && !visited.Add(cur))
+                    {
+                        continue;
+                    }
+
+                    if (includeAllOperations)
+                    {
+                        operationsInExuectionOrder.AddRange(cur.Operations);
+
+                        if (cur.BranchValue != null)
+                        {
+                            operationsInExuectionOrder.Add(cur.BranchValue);
+                        }
+                    }
+
+                    if (cur.ConditionalSuccessor?.Destination != null)
+                    {
+                        toExit.Push(cur.ConditionalSuccessor.Destination);
+                    }
+
+                    if (cur.FallThroughSuccessor?.Destination != null)
+                    {
+                        toExit.Push(cur.FallThroughSuccessor.Destination);
+                    }
+
+                    // after the entry block (which we've already handled) include everything
+                    includeAllOperations = true;
                 }
 
-                return statement;
+                return visited.OrderBy(x => x.Ordinal).ToImmutableList();
             }
 
-            static ImmutableList<SyntaxNode> HandleStatement(StatementSyntax entryStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
+            static void GetOperationsReachableAfterOperation(
+                ImmutableList<IOperation>.Builder operationsInExuectionOrder,
+                IOperation after,
+                IOperation terminateAt
+            )
             {
-                if (!alreadyVisited.Add(entryStatement))
+                var cur = after;
+                while (cur != terminateAt)
                 {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                // trace from the entry statement through to other reachable statements in it's containg block...
-                if (entryStatement.Parent is BlockSyntax block)
-                {
-                    var indexOfEntryStatement = GetIndexInParent(entryStatement);
-
-                    var maybeReachable = block.Statements.Skip(indexOfEntryStatement + 1);
-                    var reachedEnd = true;
-                    foreach (var statement in maybeReachable)
+                    var parent = cur.Parent;
+                    if (parent == null)
                     {
-                        ret.Add(statement);
-                        if (statement is ContinueStatementSyntax continueStatement)
-                        {
-                            ret.AddRange(HandleContinue(continueStatement, model, alreadyVisited));
-                            reachedEnd = false;
-                            break;
-                        }
-                        else if (statement is GotoStatementSyntax gotoStatement)
-                        {
-                            ret.AddRange(HandleGoto(gotoStatement, model, alreadyVisited));
-                            reachedEnd = false;
-                            break;
-                        }
-                        else if (statement is ReturnStatementSyntax returnStatement)
-                        {
-                            reachedEnd = false;
-                            break;
-                        }
+                        break;
                     }
 
-                    // if we're going to fallthrough, we need to handle it
-                    if (reachedEnd)
-                    {
-                        ret.AddRange(HandleFallthroughFromBlock(block, model, alreadyVisited));
-                    }
+                    var curIndexInParent = parent.Children.Select((x, ix) => (x, ix)).Single(t => t.x == cur).ix;
+                    var rightOfCur = parent.Children.Skip(curIndexInParent + 1);
+
+                    operationsInExuectionOrder.AddRange(rightOfCur);
+
+                    cur = parent;
                 }
-                else if (entryStatement.Parent is SwitchSectionSyntax switchSection)
-                {
-                    var indexOfEntryStatement = GetIndexInParent(entryStatement);
-
-                    var maybeReachable = entryStatement.Parent.ChildNodes().Skip(indexOfEntryStatement + 1);
-                    var reachedEnd = true;
-                    var doesntFallThrough = false;
-                    foreach (var statement in maybeReachable)
-                    {
-                        doesntFallThrough = true;
-
-                        ret.Add(statement);
-                        if (statement is ContinueStatementSyntax continueStatement)
-                        {
-                            ret.AddRange(HandleContinue(continueStatement, model, alreadyVisited));
-                            reachedEnd = false;
-                            break;
-                        }
-                        else if (statement is GotoStatementSyntax gotoStatement)
-                        {
-                            ret.AddRange(HandleGoto(gotoStatement, model, alreadyVisited));
-                            reachedEnd = false;
-                            break;
-                        }
-                        else if (statement is ReturnStatementSyntax returnStatement)
-                        {
-                            reachedEnd = false;
-                            break;
-                        }
-                    }
-
-                    // for a switch, we either fall through (going to next lexical branch, if any)
-                    // or break to the end of the switch _if_ we hit the end
-                    if (reachedEnd)
-                    {
-                        var parentSwitch = switchSection.Ancestors().OfType<SwitchStatementSyntax>().First();
-
-                        if (doesntFallThrough)
-                        {
-                            // go to whatever is after the switch if we hit the end
-                            var switchIx = GetIndexInParent(parentSwitch);
-                            var nextStatement = parentSwitch.ChildNodes().Skip(switchIx + 1).FirstOrDefault();
-                            if (nextStatement != null)
-                            {
-                                ret.Add(nextStatement);
-                                ret.AddRange(NodesReachableAfterExpressionImpl(nextStatement, model, alreadyVisited));
-                            }
-                        }
-                        else
-                        {
-                            // fall through to next branch
-                            var sectionIndex = parentSwitch.Sections.IndexOf(switchSection);
-
-                            // skip until we find a non-empty section
-                            var nextSection = parentSwitch.Sections.ElementAtOrDefault(sectionIndex + 1);
-                            while (nextSection != null)
-                            {
-                                if (!nextSection.Statements.Any())
-                                {
-                                    sectionIndex++;
-                                    nextSection = parentSwitch.Sections.ElementAtOrDefault(sectionIndex + 1);
-                                }
-                                else
-                                {
-                                    break;
-                                }
-                            }
-                            if (nextSection != null && nextSection.Statements.Any())
-                            {
-                                var startOfFallthrough = nextSection.Statements[0];
-                                ret.Add(startOfFallthrough);
-                                ret.AddRange(NodesReachableAfterExpressionImpl(startOfFallthrough, model, alreadyVisited));
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    // this is a single statement block of sorts
-                    // like `if(blah) continue;`
-                    // or `for(x, y, z) do();`
-
-                    ret.AddRange(HandleFallthroughFromBlock(entryStatement, model, alreadyVisited));
-                }
-
-                return ret.ToImmutable();
             }
 
-            static ImmutableList<SyntaxNode> HandleGoto(GotoStatementSyntax gotoStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
+            static bool ContainsOperation(IOperation haystack, IOperation needle)
             {
-                if (!alreadyVisited.Add(gotoStatement))
+                var isReference = haystack is IFlowCaptureReferenceOperation;
+
+                // don't count references, because we're looking for the original
+                if (!isReference && haystack.Syntax == needle.Syntax)
                 {
-                    return ImmutableList<SyntaxNode>.Empty;
+                    return true;
                 }
 
-                var kind = gotoStatement.Kind();
-                if (kind == SyntaxKind.GotoCaseStatement)
+                foreach (var child in haystack.Children)
                 {
-                    // todo: these are complicated, just bail for now
-                }
-                else if (kind == SyntaxKind.GotoDefaultStatement)
-                {
-                    // todo: these are complicated, just bail for now
-                }
-                else
-                {
-                    var labelName = (gotoStatement.Expression as IdentifierNameSyntax)?.Identifier.ValueText ?? "";
-
-                    SyntaxNode? cur = gotoStatement;
-                    while (cur != null)
+                    if (ContainsOperation(child, needle))
                     {
-                        if (cur is BlockSyntax block)
-                        {
-                            var target = block.DescendantNodes().OfType<LabeledStatementSyntax>().FirstOrDefault(l => l.Identifier.ValueText == labelName);
-                            if (target != null)
-                            {
-                                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-                                ret.Add(target.Statement);
-                                ret.AddRange(HandleStatement(target.Statement, model, alreadyVisited));
-
-                                return ret.ToImmutable();
-                            }
-                        }
-
-                        cur = cur.Parent;
+                        return true;
                     }
                 }
 
-                // todo: this is an error case, yes?
-                return ImmutableList<SyntaxNode>.Empty;
+                return false;
             }
 
-            static StatementSyntax? GetStatementWhichIsContinued(ContinueStatementSyntax continueStatement)
+            static T? GetContaining<T>(IOperation op)
             {
-                SyntaxNode? cur = continueStatement;
+                IOperation? cur = op;
                 while (cur != null)
                 {
-                    if (cur is ForStatementSyntax forStatement)
+                    if (cur is T mtd)
                     {
-                        return forStatement;
-                    }
-                    else if (cur is ForEachStatementSyntax foreachStatement)
-                    {
-                        return foreachStatement;
-                    }
-                    else if (cur is WhileStatementSyntax whileStatement)
-                    {
-                        return whileStatement;
-                    }
-                    else if (cur is DoStatementSyntax doStatement)
-                    {
-                        return doStatement;
+                        return mtd;
                     }
 
                     cur = cur.Parent;
                 }
 
-                return null;
-            }
-
-            static ImmutableList<SyntaxNode> HandleContinue(ContinueStatementSyntax continueStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                if (!alreadyVisited.Add(continueStatement))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var continuedStatement = GetStatementWhichIsContinued(continueStatement);
-                if (continueStatement != null)
-                {
-                    if (continuedStatement is ForStatementSyntax forStatement)
-                    {
-                        return HandleForContinued(forStatement, model, alreadyVisited);
-
-                    }
-                    else if (continuedStatement is ForEachStatementSyntax foreachStatement)
-                    {
-                        return HandleForEachContinued(foreachStatement, model, alreadyVisited);
-                    }
-                    else if (continuedStatement is WhileStatementSyntax whileStatement)
-                    {
-                        return HandleWhileContinued(whileStatement, model, alreadyVisited);
-                    }
-                    else if (continuedStatement is DoStatementSyntax doStatement)
-                    {
-                        return HandleDoContinued(doStatement, model, alreadyVisited);
-                    }
-                }
-
-                // todo: this is kind of an error condition, yes?
-                return ImmutableList<SyntaxNode>.Empty;
-            }
-
-            static ImmutableList<SyntaxNode> HandleLoopBody(StatementSyntax statementOrBlock, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                if (!alreadyVisited.Add(statementOrBlock))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                // and now repeat the loop
-                var firstStatement = statementOrBlock;
-                if (firstStatement is BlockSyntax block && block.Statements.Any())
-                {
-                    firstStatement = block.Statements[0];
-                }
-
-                ret.Add(firstStatement);
-                ret.AddRange(HandleStatement(firstStatement, model, alreadyVisited));
-
-                return ret.ToImmutable();
-            }
-
-            static ImmutableList<SyntaxNode> HandleForContinued(ForStatementSyntax forStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                if (!alreadyVisited.Add(forStatement))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                if (forStatement.Condition != null)
-                {
-                    ret.Add(forStatement.Condition);
-                }
-                foreach (var incr in forStatement.Incrementors)
-                {
-                    ret.Add(incr);
-                }
-
-                ret.AddRange(HandleLoopBody(forStatement.Statement, model, alreadyVisited));
-
-                return ret.ToImmutable();
-            }
-
-            static ImmutableList<SyntaxNode> HandleForEachContinued(ForEachStatementSyntax foreachStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                if (!alreadyVisited.Add(foreachStatement))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                // todo: this needs to actually refer to the enumerator, somehow
-                ret.Add(foreachStatement.Expression);
-
-                ret.AddRange(HandleLoopBody(foreachStatement.Statement, model, alreadyVisited));
-
-                return ret.ToImmutable();
-            }
-
-            static ImmutableList<SyntaxNode> HandleWhileContinued(WhileStatementSyntax whileStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                if (!alreadyVisited.Add(whileStatement))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                return ImmutableList.Create<SyntaxNode>(whileStatement.Condition);
-            }
-
-            static ImmutableList<SyntaxNode> HandleDoContinued(DoStatementSyntax doStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                if (!alreadyVisited.Add(doStatement))
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-                ret.Add(doStatement.Condition);
-
-                ret.AddRange(HandleLoopBody(doStatement.Statement, model, alreadyVisited));
-
-                return ret.ToImmutable();
-            }
-
-            static ImmutableList<SyntaxNode> HandleFallthroughFromBlock(SyntaxNode blockStatement, SemanticModel model, HashSet<SyntaxNode> alreadyVisited)
-            {
-                // intentionally not checking alreadyVisited here, we have to do it further down the method
-
-                var blockParent = blockStatement.Parent;
-                if (blockParent == null)
-                {
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                var ret = ImmutableList.CreateBuilder<SyntaxNode>();
-
-                // we may go up a level here because the fallthrough implies handling a bit more than just the blockParent
-                SyntaxNode effectiveBlockStatement = blockStatement;
-                var effectiveBlockParent = blockParent;
-
-                var skipMarkBecauseExitingTry = false;
-
-                // special cases for loop constructs & try / catch / finally
-                if (blockParent is ForStatementSyntax forStatement)
-                {
-                    effectiveBlockStatement = forStatement;
-                    effectiveBlockParent = forStatement.Parent;
-
-                    ret.AddRange(HandleForContinued(forStatement, model, alreadyVisited));
-                }
-                else if (blockParent is ForEachStatementSyntax foreachStatement)
-                {
-                    effectiveBlockStatement = foreachStatement;
-                    effectiveBlockParent = foreachStatement.Parent;
-
-                    ret.AddRange(HandleForEachContinued(foreachStatement, model, alreadyVisited));
-                }
-                else if (blockParent is WhileStatementSyntax whileStatement)
-                {
-                    effectiveBlockStatement = whileStatement;
-                    effectiveBlockParent = whileStatement.Parent;
-
-                    ret.AddRange(HandleWhileContinued(whileStatement, model, alreadyVisited));
-                }
-                else if (blockParent is DoStatementSyntax doStatement)
-                {
-                    effectiveBlockStatement = doStatement;
-                    effectiveBlockParent = doStatement.Parent;
-
-                    ret.AddRange(HandleDoContinued(doStatement, model, alreadyVisited));
-                }
-                else if (blockParent is TryStatementSyntax tryStatement)
-                {
-                    skipMarkBecauseExitingTry = true;
-
-                    effectiveBlockStatement = tryStatement;
-                    effectiveBlockParent = tryStatement.Parent;
-
-                    // nothing extra, control flow into catch & finally are indirect and handled elsewhere
-                }
-                else if (blockParent is CatchClauseSyntax catchStatement)
-                {
-                    skipMarkBecauseExitingTry = true;
-
-                    effectiveBlockStatement = blockParent.Ancestors().OfType<TryStatementSyntax>().FirstOrDefault();
-                    if (effectiveBlockStatement == null)
-                    {
-                        // todo: this is kind of an error case, yes?
-                        return ImmutableList<SyntaxNode>.Empty;
-                    }
-
-                    effectiveBlockParent = effectiveBlockStatement.Parent;
-
-                    // nothing extra, control flow into catch & finally are indirect and handled elsewhere
-                }
-                else if (blockParent is FinallyClauseSyntax finallyClause)
-                {
-                    skipMarkBecauseExitingTry = true;
-
-                    effectiveBlockStatement = blockParent.Ancestors().OfType<TryStatementSyntax>().FirstOrDefault();
-                    if (effectiveBlockStatement == null)
-                    {
-                        // todo: this is kind of an error case, yes?
-                        return ImmutableList<SyntaxNode>.Empty;
-                    }
-
-                    effectiveBlockParent = effectiveBlockStatement.Parent;
-
-                    // nothing extra, control flow into catch & finally are indirect and handled elsewhere
-                }
-                else if (blockParent is LabeledStatementSyntax labeledStatement)
-                {
-                    effectiveBlockStatement = labeledStatement;
-                    effectiveBlockParent = labeledStatement.Parent;
-                }
-
-                // have to defer until here because we're changing the statement we're handling
-                if (!skipMarkBecauseExitingTry && !alreadyVisited.Add(effectiveBlockStatement) && ret.Count == 0) // ret will have stuff if we actually handled one of the weird loops
-                {                                                                   //    so that serves as a way to say "still do work, please"
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-
-                if (effectiveBlockParent == null)
-                {
-                    // todo: this is kind of an error case, yes?
-                    return ImmutableList<SyntaxNode>.Empty;
-                }
-
-                // fallthrough
-                var effectiveBlockIndexInParent = GetIndexInParent(effectiveBlockStatement);
-                var firstStatementAfterEffectiveBlockStatement = effectiveBlockParent.ChildNodes().Skip(effectiveBlockIndexInParent + 1).FirstOrDefault();
-
-                if (firstStatementAfterEffectiveBlockStatement != null)
-                {
-                    // have to include it here, because the recursion is going to start looking after it
-                    ret.Add(firstStatementAfterEffectiveBlockStatement);
-                    NodesReachableAfterExpressionImpl(firstStatementAfterEffectiveBlockStatement, model, alreadyVisited);
-                }
-
-                return ret.ToImmutable();
-            }
-
-            static int GetIndexInParent(SyntaxNode node)
-            {
-                var parent = node.Parent;
-                if (parent == null)
-                {
-                    throw new Exception("Shouldn't be possible");
-                }
-
-                return parent.ChildNodes().Select((s, ix) => (s, ix)).Single(t => t.s == node).ix;
+                return default;
             }
         }
     }

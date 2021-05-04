@@ -34,7 +34,8 @@ namespace AsyncSizeAnalyzer.Tests
                 new CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
                     allowUnsafe: true,
-                    nullableContextOptions: NullableContextOptions.Enable
+                    nullableContextOptions: NullableContextOptions.Enable,
+                    optimizationLevel: OptimizationLevel.Release
                 );
 
             var parseOptions = new CSharpParseOptions(LanguageVersion.CSharp8);

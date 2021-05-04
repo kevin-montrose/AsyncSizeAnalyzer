@@ -14,20 +14,11 @@ You can grab the nuget package from the repo.  Put it in a folder, add the folde
 
 ## Limitations
 
-Roslyn doesn't expose enough to really see what it's doing with state machine generation.  This is maybe 8-hours worth of hacking, so a complete re-implementation of the relevant state tracking is... buggy, I guarantee it.  It'd be nice if `SemanticModel` could expose this information.
+Roslyn doesn't expose enough to really see what it's doing with state machine generation.  This is maybe <strike>8-hours</strike> 16-hours worth of hacking, so a complete re-implementation of the relevant state tracking is... buggy, I guarantee it.  It'd be nice if `SemanticModel` could expose this information.
 
-Some things are straight up unimplemented:
+In theory this can deal with any sort of C# control flow, but in practice only relatively simple code is in the test cases.  I ran it against a version of Cesil (which is pretty complicated) and the results are "believable".
 
- - any kind of `using`
- - `yield`
-
-Some things are untested:
-
- - `await using`
- - `await foreach`
- - anonymous delegates
-
-And then some things are wrong:
+That said, there are something things that are definitell wrong:
 
  - always assumes references are 8 bytes
  - assumes generic types are 0 bytes
