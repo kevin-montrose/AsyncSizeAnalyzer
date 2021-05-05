@@ -18,7 +18,7 @@ Roslyn doesn't expose enough to really see what it's doing with state machine ge
 
 In theory this can deal with any sort of C# control flow, but in practice only relatively simple code is in the test cases.  I ran it against a version of Cesil (which is pretty complicated) and the results are "believable".
 
-That said, there are something things that are definitell wrong:
+That said, there are something things that are definitely wrong:
 
  - always assumes references are 8 bytes
  - assumes generic types are 0 bytes
