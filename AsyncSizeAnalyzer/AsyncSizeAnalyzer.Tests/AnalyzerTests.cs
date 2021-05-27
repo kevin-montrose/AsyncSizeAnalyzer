@@ -126,7 +126,15 @@ namespace AsyncSizeAnalyzer.Tests
 
         static async Task<ImmutableArray<Diagnostic>> RunAnalyzerAsync(string file, int maxBytes)
         {
-            var comp = await TestHelpers.GetCompilationWithAnalyzerAsync(file, new Analyzer() { MaxSizeBytes = maxBytes });
+            var comp =
+                await TestHelpers.GetCompilationWithAnalyzerAsync(
+                    file,
+                    new Analyzer(),
+                    new[]
+                    {
+                        ("dotnet_diagnostic.ASA1000.warn_when_larger_than_bytes", maxBytes.ToString()),
+                    }
+                );
             
             return await comp.GetAllDiagnosticsAsync();
         }

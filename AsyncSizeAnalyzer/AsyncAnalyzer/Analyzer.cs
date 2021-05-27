@@ -38,46 +38,18 @@ namespace AsyncSizeAnalyzer
 
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } = ImmutableArray.Create(AsyncStateMachineExceedsConfiguredWarningSize);
 
-        public int? MaxSizeBytes { get; set; }
-
         public override void Initialize(AnalysisContext context)
         {
             // ignore generated code, and we're thread safe
             context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
-
-            if (!Debugger.IsAttached)
-            {
-                context.EnableConcurrentExecution();
-            }
+            context.EnableConcurrentExecution();
 
             context.RegisterCompilationStartAction(OnCompilationStart);
         }
 
         private void OnCompilationStart(CompilationStartAnalysisContext obj)
         {
-            int? maximumSize = null;
-
-            var opts = obj.Options;
-            var configFile = opts.AdditionalFiles.SingleOrDefault(x => x.Path.EndsWith("ASA.txt"));
-
-            if (configFile != null)
-            {
-                var text = configFile.GetText()?.ToString() ?? "";
-
-                var configLines = text.Replace("\r\n", "\n").Split('\n');
-                var bytes = configLines.Where(l => int.TryParse(l, out _)).Select(l => (int?)int.Parse(l)).FirstOrDefault();
-
-                maximumSize = bytes;
-
-                var shouldBreak = configLines.Any(l => l.Equals("break"));
-
-                if (shouldBreak && !Debugger.IsAttached)
-                {
-                    Debugger.Launch();
-                }
-            }
-
-            MaxSizeBytes = MaxSizeBytes ?? maximumSize ?? DEFAULT_MAX_SIZE_BYTES;
+            // this is a convenient place to add a Debugger.Launch() if you're testing
 
             obj.RegisterOperationAction(OnMethodOperation, OperationKind.MethodBody);
         }
@@ -85,6 +57,16 @@ namespace AsyncSizeAnalyzer
         private void OnMethodOperation(OperationAnalysisContext obj)
         {
             var body = (IMethodBodyOperation)obj.Operation;
+
+            int? maxBytes = null;
+            var opts = obj.Options.AnalyzerConfigOptionsProvider.GetOptions(obj.Operation.Syntax.SyntaxTree);
+            if (opts.TryGetValue("dotnet_diagnostic.ASA1000.warn_when_larger_than_bytes", out var maxBytesValue))
+            {
+                if (int.TryParse(maxBytesValue, out var maxBytesParsed))
+                {
+                    maxBytes = maxBytesParsed;
+                }
+            }
 
             var declaringType = body.Syntax.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().FirstOrDefault();
             if (declaringType == null)
@@ -100,7 +82,7 @@ namespace AsyncSizeAnalyzer
                 return;
             }
 
-            int maximumSize = MaxSizeBytes ?? DEFAULT_MAX_SIZE_BYTES;
+            int maximumSize = maxBytes ?? DEFAULT_MAX_SIZE_BYTES;
 
             var awaitPoints = body.DescendantsAndSelf().OfType<IAwaitOperation>();
 

@@ -81,6 +81,7 @@ namespace AsyncSizeAnalyzer.Tests
         public static async ValueTask<CompilationWithAnalyzers> GetCompilationWithAnalyzerAsync(
             string testFile,
             DiagnosticAnalyzer analyzer, 
+            IEnumerable<(string Name, string Value)> editorConfig,
             [CallerMemberName] string caller = null
         )
         {
@@ -130,6 +131,39 @@ namespace AsyncSizeAnalyzer.Tests
             var project = solution.GetProject(projectId);
 
             project = project.AddDocument(csFile, testFile).Project;
+
+
+            if (editorConfig.Any())
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("root = true");
+                sb.AppendLine("[*]");
+
+                foreach (var (name, val) in editorConfig)
+                {
+                    sb.Append(name);
+                    sb.Append(" = ");
+                    sb.Append(val);
+                    sb.AppendLine();
+                }
+
+                /*var editorConfigFile =
+                    project.AddAdditionalDocument(
+                        ".editorconfig",
+                        SourceText.From(sb.ToString(), Encoding.UTF8)
+                    );
+
+                project = editorConfigFile.Project;
+                solution = project.Solution;*/
+
+                //project = project.AddAnalyzerConfigDocument(".editorconfig", SourceText.From(sb.ToString(), Encoding.UTF8), filePath: "/fake/path").Project;
+                //project = project.AddAdditionalDocument(".editorconfig", SourceText.From(sb.ToString(), Encoding.UTF8)).Project;
+                solution = project.Solution;
+                solution = solution.AddAnalyzerConfigDocument(DocumentId.CreateNewId(projectId), ".editorconfig", SourceText.From(sb.ToString(), Encoding.UTF8), filePath: "/fake/path");
+                project = solution.GetProject(projectId);
+            }
+
+            Assert.True(workspace.TryApplyChanges(solution));
 
             var comp = await project.GetCompilationAsync();
             var diags = comp.GetDiagnostics();
