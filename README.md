@@ -6,9 +6,19 @@ This is an analyzer which estimates how much storage is needed for a state machi
 
 ## Config
 
+<strike>
 Slap an `ASA.txt` in your project, and a `<AdditionalFiles Include="ASA.txt" />` in an `ItemGroup` in your csproj file.  Yes this stinks, but config isn't the point.
+</strike>
 
-The first number in the file is the number of bytes to warn about (set it < 0 to warn on every await).
+With 1.0.2 you can configure via an `.editorconfig` file.  Put `dotnet_diagnostic.ASA1000.warn_when_larger_than_bytes = <some number>` into the relevant `.editorconfig` for your project.  You may need to add it as an additional file, with a 
+
+```
+ <ItemGroup>
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)\.editorconfig" />
+  </ItemGroup>
+```
+
+in the `.csproj` depending on your setup.
 
 You can grab the nuget package from the repo.  Put it in a folder, add the folder as source, then add a reference to the package.
 
